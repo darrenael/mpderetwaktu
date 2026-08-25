@@ -1,2 +1,2 @@
-# mpderetwaktu
-Praktikum MPDW 2023
+# Mata Kuliah Metode Peramalan Deret Waktu
+Praktikum MPDW 2026
