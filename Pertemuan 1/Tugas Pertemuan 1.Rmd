@@ -1,0 +1,577 @@
+---
+title: "Tugas Praktikum 1 MPDW"
+author: "Darren Nathanael Heryanto"
+date: "27 Agustus 2026"
+output:
+  rmdformats::readthedown:
+    toc_depth: 3
+    self_contained: true
+    highlight: tango
+  html_document:
+    toc_depth: '2'
+    df_print: paged
+---
+
+# Metode Pemulusan Data Sunspot
+
+## Data Preparation
+
+### Import Library
+
+```{r}
+library("forecast")
+library("graphics")
+library("TTR")
+library("TSA")
+library("rio")
+library("readxl")
+library("ggplot2")
+```
+
+### Import Data
+
+```{r}
+data_ss <- read_excel("C:/Users/user/Downloads/data_sunspot_darren.xlsx")
+head(data_ss)
+```
+
+### Exploratory Data
+
+```{r}
+sunspot_ts <- ts(data_ss$`Sunspot Number`)
+
+summary(sunspot_ts)
+```
+
+```{r}
+ts.plot(sunspot_ts, col = "gold", xlab = "Time Period",
+        ylab = "Sunspot", main = "Time Series Plot")
+
+points(sunspot_ts, col = "gold", pch = 16)
+```
+
+# Split to Data Train and Data Test
+
+```{r}
+n <- nrow(data_ss)
+n_train <- floor(0.8 * n)
+
+training_ss <- data_ss[1:n_train, ]
+testing_ss  <- data_ss[(n_train + 1):n, ]
+
+train_ss.ts <- ts(training_ss$`Sunspot Number`)
+test_ss.ts  <- ts(testing_ss$`Sunspot Number`)
+```
+
+```{r}
+ts.plot(sunspot_ts, col = "gold", xlab = "Time Period",
+        ylab = "Sunspot", main = "Plot Whole Data")
+
+points(sunspot_ts, col = "gold", pch = 16)
+```
+
+## Plot Data Train
+
+```{r}
+ts.plot(train_ss.ts, col = "darkgreen", xlab = "Time Period",
+        ylab = "Sunspot", main = "Plot Data Train")
+
+points(train_ss.ts, col = "darkgreen", pch = 16)
+```
+
+## Plot Data Test
+
+```{r}
+ts.plot(test_ss.ts, col = "orange", xlab = "Time Period",
+        ylab = "Sunspot", main = "Plot Data Test")
+
+points(test_ss.ts, col = "orange", pch = 16)
+```
+
+## Plot Final
+
+```{r}
+ggplot() + 
+  geom_line(
+    data = training_ss, 
+    aes(x = `Decimal Date`, y = `Sunspot Number`, col = "Data Train")
+  ) +
+  geom_line(
+    data = testing_ss, 
+    aes(x = `Decimal Date`, y = `Sunspot Number`, col = "Data Test")
+  ) +
+  labs(
+    x = "Time Period",
+    y = "Sunspot Number",
+    color = "Legend"
+  ) +
+  scale_colour_manual(
+    name = "Keterangan:",
+    breaks = c("Data Train", "Data Test"),
+    values = c(
+      "Data Train" = "darkgreen",
+      "Data Test" = "orange"
+    )
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom",
+    plot.caption = element_text(hjust = 0.5, size = 12)
+  )
+```
+
+# Single Moving Average & Double Moving Average
+
+## Single Moving Average
+
+### Forecasting
+
+```{r}
+sunspot_sma <- SMA(train_ss.ts, n = 4)
+sunspot_fcast <- c(NA, sunspot_sma)
+
+sunspot_final <- cbind(
+  aktual = c(train_ss.ts, rep(NA, 20)),
+  smoothing = c(sunspot_sma, rep(NA, 20)),
+  forecast = c(sunspot_fcast,rep(sunspot_fcast[length(sunspot_fcast)], 19)
+  )
+)
+
+sunspot_final
+```
+
+### Plot forecast
+
+```{r}
+ts.plot(
+  sunspot_final[,1],
+  xlab = "Time Period",
+  ylab = "Sunspot Number",
+  main = "SMA N=4 Sunspot Number",
+  col = "black",
+  lwd = 1
+)
+
+points(sunspot_final[,1], pch = 16, cex = 0.5)
+
+lines(sunspot_final[,2], col = "darkgreen", lwd = 2)
+lines(sunspot_final[,3], col = "orange", lwd = 2)
+
+legend(
+  "topleft",
+  c("Data Aktual", "Data Pemulusan", "Data Peramalan"),
+  lty = 1,
+  col = c("black", "darkgreen", "orange"),
+  lwd = c(1, 2, 2),
+  cex = 0.7
+)
+```
+
+### Data Train Accuration
+
+```{r}
+error_train.sma <- train_ss.ts - sunspot_fcast[1:length(train_ss.ts)]
+
+SSE_train.sma <- sum(error_train.sma[5:length(train_ss.ts)]^2)
+MSE_train.sma <- mean(error_train.sma[5:length(train_ss.ts)]^2)
+MAPE_train.sma <- mean(abs((error_train.sma[5:length(train_ss.ts)] /
+                              train_ss.ts[5:length(train_ss.ts)]) * 100))
+
+acc_train.sma <- matrix(
+  c(SSE_train.sma, MSE_train.sma, MAPE_train.sma)
+)
+
+row.names(acc_train.sma) <- c("SSE", "MSE", "MAPE")
+colnames(acc_train.sma) <- c("Accuration m = 4")
+
+acc_train.sma
+```
+
+Nilai akurasi data train diperoleh sebesar $SSE = 65132.75$, $MSE = 857.01$, dan $MAPE = 24.82\%$. Berdasarkan nilai MAPE tersebut, metode Simple Moving Average dengan $m=4$ memiliki tingkat akurasi yang tergolong cukup.
+
+### Data Test Accuration
+
+```{r}
+start_test <- n_train + 1
+end_test <- n_train + length(test_ss.ts)
+
+error_test.sma <- test_ss.ts -
+  sunspot_final[start_test:end_test, "forecast"]
+
+SSE_test.sma <- sum(error_test.sma^2)
+MSE_test.sma <- mean(error_test.sma^2)
+MAPE_test.sma <- mean(abs((error_test.sma / test_ss.ts) * 100))
+
+acc_test.sma <- matrix(c(SSE_test.sma, MSE_test.sma, MAPE_test.sma))
+
+row.names(acc_test.sma) <- c("SSE", "MSE", "MAPE")
+colnames(acc_test.sma) <- c("Accuraton m = 4")
+
+acc_test.sma
+```
+
+Nilai akurasi data test diperoleh sebesar $SSE = 22844.75$, $MSE = 1142.238$, dan $MAPE = 21.5\%$. Berdasarkan nilai MAPE tersebut, metode Simple Moving Average dengan $m=4$ memiliki tingkat akurasi yang tergolong cukup.
+
+
+## Double Moving Average
+
+### Forecasting
+
+```{r}
+sunspot_sma <- SMA(train_ss.ts, n = 4)
+sunspot_dma <- SMA(sunspot_sma, n = 4)
+
+At <- 2 * sunspot_sma - sunspot_dma
+Bt <- 2 / (4 - 1) * (sunspot_sma - sunspot_dma)
+
+sunspot_dma_final <- At + Bt
+sunspot_fcast_dma <- c(NA, sunspot_dma_final)
+
+t <- 1:20
+f <- c()
+
+for (i in t) {
+  f[i] <- At[length(At)] + Bt[length(Bt)] * i
+}
+
+sunspot_final_dma <- cbind(
+  aktual = c(sunspot_ts),
+  smoothing1 = c(sunspot_sma, rep(NA, 20)),
+  smoothing2 = c(sunspot_dma, rep(NA, 20)),
+  At = c(At, rep(NA, 20)),
+  Bt = c(Bt, rep(NA, 20)),
+  forecast = c(sunspot_fcast_dma, f[-1])
+)
+
+sunspot_final_dma
+```
+
+### Plot forecast
+
+```{r}
+ts.plot(sunspot_final_dma[,1],
+  xlab = "Time Period",
+  ylab = "Sunspot Number",
+  main = "DMA N=4 Sunspot Number",
+  col = "black"
+)
+
+points(sunspot_final_dma[,1],pch = 16,cex = 0.5)
+lines(sunspot_final_dma[,3],col = "darkgreen",lwd = 2)
+lines(sunspot_final_dma[,6],col = "orange",lwd = 2)
+
+legend("topleft",c("Data Aktual", "Data Pemulusan", "Data Peramalan"),
+  lty = 1,
+  col = c("black", "darkgreen", "orange"),
+  lwd = c(1, 2, 2),
+  cex = 0.8
+)
+```
+
+### Data Train Accuration
+
+```{r}
+error_train.dma <- train_ss.ts - sunspot_fcast_dma[1:length(train_ss.ts)]
+
+SSE_train.dma <- sum(error_train.dma[8:length(train_ss.ts)]^2)
+MSE_train.dma <- mean(error_train.dma[8:length(train_ss.ts)]^2)
+MAPE_train.dma <- mean(abs((error_train.dma[8:length(train_ss.ts)] /
+       train_ss.ts[8:length(train_ss.ts)]) * 100))
+
+acc_train.dma <- matrix(c(SSE_train.dma, MSE_train.dma, MAPE_train.dma))
+
+row.names(acc_train.dma) <- c("SSE", "MSE", "MAPE")
+colnames(acc_train.dma) <- c("Akurasi m = 4")
+
+acc_train.dma
+```
+
+Nilai akurasi data train diperoleh sebesar $SSE = 48681.643$, $MSE = 666.872$, dan $MAPE = 20\%$. Berdasarkan nilai MAPE tersebut, metode Double Moving Average dengan $m=4$ memiliki tingkat akurasi yang tergolong cukup.
+
+### Data Test Accuration
+
+```{r}
+start_test <- n_train + 1
+end_test <- n_train + length(test_ss.ts)
+
+error_test.dma <- test_ss.ts -sunspot_final_dma[start_test:end_test, "forecast"]
+
+SSE_test.dma <- sum(error_test.dma^2)
+MSE_test.dma <- mean(error_test.dma^2)
+MAPE_test.dma <- mean(abs((error_test.dma / test_ss.ts) * 100))
+
+acc_test.dma <- matrix(c(SSE_test.dma, MSE_test.dma, MAPE_test.dma))
+
+row.names(acc_test.dma) <- c("SSE", "MSE", "MAPE")
+colnames(acc_test.dma) <- c("Akurasi m = 4")
+
+acc_test.dma
+```
+
+Nilai akurasi data test diperoleh sebesar $SSE = 161196.7$, $MSE = 8059.83$, dan $MAPE = 72.34\%$. Berdasarkan nilai MAPE tersebut, metode Double Moving Average dengan $m=4$ memiliki tingkat akurasi yang tergolong buruk.
+
+# Single Exponential Smoothing & Double Exponential Smoothing
+
+## Single Exponential Smoothing
+
+### SES Modeling
+
+```{r}
+ses_02 <- ses(train_ss.ts,h = 20,alpha = 0.2)
+ses_07 <- ses(train_ss.ts,h = 20,alpha = 0.7)
+ses_opt <- ses(train_ss.ts,h = 20,alpha = NULL)
+
+ses_opt$model$par["alpha"]
+```
+
+### Plot SES
+
+```{r}
+plot(ses_02,main = "SES Alpha = 0.2 Sunspot Number",xlab = "Time Period",ylab = "Sunspot Number")
+```
+
+```{r}
+plot(ses_07,main = "SES Alpha = 0.7 Sunspot Number",xlab = "Time Period",ylab = "Sunspot Number")
+```
+
+```{r}
+plot(ses_opt,main = "SES Alpha Optimum Sunspot Number",xlab = "Time Period",ylab = "Sunspot Number")
+```
+
+### Accuration Data Train
+
+```{r}
+error_train.ses02 <- residuals(ses_02)
+
+SSE_train.ses02 <- sum(error_train.ses02^2, na.rm = TRUE)
+MSE_train.ses02 <- mean(error_train.ses02^2, na.rm = TRUE)
+MAPE_train.ses02 <- mean(abs((error_train.ses02 / train_ss.ts) * 100),na.rm = TRUE)
+```
+
+```{r}
+error_train.ses07 <- residuals(ses_07)
+
+SSE_train.ses07 <- sum(error_train.ses07^2, na.rm = TRUE)
+MSE_train.ses07 <- mean(error_train.ses07^2, na.rm = TRUE)
+MAPE_train.ses07 <- mean(abs((error_train.ses07 / train_ss.ts) * 100),na.rm = TRUE)
+```
+
+```{r}
+error_train.sesopt <- residuals(ses_opt)
+
+SSE_train.sesopt <- sum(error_train.sesopt^2, na.rm = TRUE)
+MSE_train.sesopt <- mean(error_train.sesopt^2, na.rm = TRUE)
+MAPE_train.sesopt <- mean(abs((error_train.sesopt / train_ss.ts) * 100),na.rm = TRUE)
+```
+
+```{r}
+acc_train.ses <- data.frame(
+  Metode = c("Alpha = 0.2",
+             "Alpha = 0.7",
+             "Alpha Optimum"),
+  
+  SSE = c(SSE_train.ses02,
+          SSE_train.ses07,
+          SSE_train.sesopt),
+  
+  MSE = c(MSE_train.ses02,
+          MSE_train.ses07,
+          MSE_train.sesopt),
+  
+  MAPE = c(MAPE_train.ses02,
+           MAPE_train.ses07,
+           MAPE_train.sesopt)
+)
+
+acc_train.ses
+```
+
+### Accuration Data Test
+
+```{r}
+aktual_test <- as.numeric(test_ss.ts)
+
+pred_ses02  <- as.numeric(ses_02$mean)
+pred_ses07  <- as.numeric(ses_07$mean)
+pred_sesopt <- as.numeric(ses_opt$mean)
+```
+
+```{r}
+error_test.ses02  <- aktual_test - pred_ses02
+error_test.ses07  <- aktual_test - pred_ses07
+error_test.sesopt <- aktual_test - pred_sesopt
+
+SSE_test.ses02 <- sum(error_test.ses02^2)
+MSE_test.ses02 <- mean(error_test.ses02^2)
+MAPE_test.ses02 <- mean(abs(error_test.ses02 / aktual_test) * 100)
+
+SSE_test.ses07 <- sum(error_test.ses07^2)
+MSE_test.ses07 <- mean(error_test.ses07^2)
+MAPE_test.ses07 <- mean(abs(error_test.ses07 / aktual_test) * 100)
+
+SSE_test.sesopt <- sum(error_test.sesopt^2)
+MSE_test.sesopt <- mean(error_test.sesopt^2)
+MAPE_test.sesopt <- mean(abs(error_test.sesopt / aktual_test) * 100)
+```
+
+```{r}
+akurasi_test.ses <- data.frame(
+  Metode = c("Alpha = 0.2", "Alpha = 0.7", "Alpha Optimum"),
+  SSE = c(SSE_test.ses02, SSE_test.ses07, SSE_test.sesopt),
+  MSE = c(MSE_test.ses02, MSE_test.ses07, MSE_test.sesopt),
+  MAPE = c(MAPE_test.ses02, MAPE_test.ses07, MAPE_test.sesopt)
+)
+
+akurasi_test.ses
+```
+
+### Plot Alpha Optimum
+
+```{r}
+autoplot(train_ss.ts, series = "Data Actual") +
+  autolayer(fitted(ses_opt), series = "Data Smoothing") +
+  autolayer(ses_opt$mean, series = "Data Forecasting") +
+  xlab("Time Period") +
+  ylab("Sunspot Number") +
+  ggtitle("SES Alpha Optimum Sunspot Number") +
+  scale_colour_manual(
+    values = c(
+      "Data Actual" = "black",
+      "Data Smoothing" = "darkgreen",
+      "Data Forecasting" = "orange"
+    )
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+## Double Exponential Smoothing
+
+### DES Modeling
+
+```{r}
+des_02 <- HoltWinters(train_ss.ts,alpha = 0.2,beta = 0.2,gamma = FALSE)
+des_06 <- HoltWinters(train_ss.ts,alpha = 0.6,beta = 0.3,gamma = FALSE)
+des_opt <- HoltWinters(train_ss.ts,gamma = FALSE)
+
+des_opt$alpha
+des_opt$beta
+```
+
+### Forecasting
+
+```{r}
+(forecast_des02 <- forecast(des_02, h = 20))
+(forecast_des06 <- forecast(des_06, h = 20))
+(forecast_desopt <- forecast(des_opt, h = 20))
+```
+
+### Accuration Data Train
+
+```{r}
+aktual_train.des <- as.numeric(train_ss.ts)[3:length(train_ss.ts)]
+
+error_train.des02 <- aktual_train.des - as.numeric(des_02$fitted[, "xhat"])
+error_train.des06 <- aktual_train.des - as.numeric(des_06$fitted[, "xhat"])
+error_train.desopt <- aktual_train.des - as.numeric(des_opt$fitted[, "xhat"])
+
+SSE_train.des02 <- sum(error_train.des02^2)
+MSE_train.des02 <- mean(error_train.des02^2)
+MAPE_train.des02 <- mean(abs(error_train.des02 / aktual_train.des) * 100)
+
+SSE_train.des06 <- sum(error_train.des06^2)
+MSE_train.des06 <- mean(error_train.des06^2)
+MAPE_train.des06 <- mean(abs(error_train.des06 / aktual_train.des) * 100)
+
+SSE_train.desopt <- sum(error_train.desopt^2)
+MSE_train.desopt <- mean(error_train.desopt^2)
+MAPE_train.desopt <- mean(abs(error_train.desopt / aktual_train.des) * 100)
+```
+
+```{r}
+acc_train.des <- data.frame(
+  Metode = c(
+    "Alpha = 0.2, Beta = 0.2",
+    "Alpha = 0.6, Beta = 0.3",
+    "Alpha & Beta Optimum"),
+  SSE = c(
+    SSE_train.des02,
+    SSE_train.des06,
+    SSE_train.desopt),
+  MSE = c(
+    MSE_train.des02,
+    MSE_train.des06,
+    MSE_train.desopt),
+  MAPE = c(
+    MAPE_train.des02,
+    MAPE_train.des06,
+    MAPE_train.desopt))
+
+acc_train.des
+```
+
+### Accuration Data Test
+
+```{r}
+error_test.des02 <- as.numeric(test_ss.ts) - as.numeric(forecast_des02$mean)
+error_test.des06 <- as.numeric(test_ss.ts) - as.numeric(forecast_des06$mean)
+error_test.desopt <- as.numeric(test_ss.ts) - as.numeric(forecast_desopt$mean)
+
+SSE_test.des02 <- sum(error_test.des02^2)
+MSE_test.des02 <- mean(error_test.des02^2)
+MAPE_test.des02 <- mean(abs(error_test.des02 / as.numeric(test_ss.ts)) * 100)
+
+SSE_test.des06 <- sum(error_test.des06^2)
+MSE_test.des06 <- mean(error_test.des06^2)
+MAPE_test.des06 <- mean(abs(error_test.des06 / as.numeric(test_ss.ts)) * 100)
+
+SSE_test.desopt <- sum(error_test.desopt^2)
+MSE_test.desopt <- mean(error_test.desopt^2)
+MAPE_test.desopt <- mean(abs(error_test.desopt / as.numeric(test_ss.ts)) * 100)
+```
+
+```{r}
+akurasi_test.des <- data.frame(
+  Metode = c(
+    "Alpha = 0.2, Beta = 0.2",
+    "Alpha = 0.6, Beta = 0.3",
+    "Alpha & Beta Optimum"),
+  SSE = c(
+    SSE_test.des02,
+    SSE_test.des06,
+    SSE_test.desopt),
+  MSE = c(
+    MSE_test.des02,
+    MSE_test.des06,
+    MSE_test.desopt),
+  MAPE = c(
+    MAPE_test.des02,
+    MAPE_test.des06,
+    MAPE_test.desopt))
+
+akurasi_test.des
+```
+
+### Plot Parameter Optimum
+
+```{r}
+autoplot(train_ss.ts, series = "Data Actual") +
+  autolayer(fitted(des_opt)[,1], series = "Data Smoothing") +
+  autolayer(forecast_desopt$mean, series = "Data Forecasting") +
+  xlab("Time Period") +
+  ylab("Sunspot Number") +
+  ggtitle("DES Optimum Sunspot Number") +
+  scale_colour_manual(
+    values = c(
+      "Data Actual" = "black",
+      "Data Smoothing" = "darkgreen",
+      "Data Forecasting" = "orange"
+    )
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+# Kesimpulan
+
+Berdasarkan perbandingan nilai akurasi pada data uji, metode Single Exponential Smoothing (SES) dengan parameter optimum menghasilkan kinerja peramalan terbaik dibandingkan metode SMA, DMA, dan DES yang diuji. Hal ini ditunjukkan oleh nilai MAPE data uji yang paling kecil, yaitu sebesar $20.47\%$. Berdasarkan nilai MAPE tersebut, hasil peramalan dapat dikategorikan memiliki tingkat akurasi yang cukup.
