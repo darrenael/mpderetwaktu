@@ -1,0 +1,351 @@
+---
+html_document:
+  toc_depth: '2'
+author: "Darren Nathanael Heryanto"
+date: "2 September 2026"
+output:
+  rmdformats::readthedown:
+    toc_depth: 2
+    self_contained: true
+    highlight: tango
+  html_document:
+    toc_depth: '2'
+    df_print: paged
+title: "Tugas Praktikum 2 MPDW"
+df_print: paged
+---
+
+# Import Packages
+
+```{r}
+library(lmtest)
+library(orcutt)
+library(HoRM)
+```
+
+# Market Share and Price
+
+## Input Data
+
+```{r}
+period <- 1:20
+marketshare <- c(3.63,4.20,3.33,4.54,2.89,4.87,4.90,5.29,6.18,7.20,
+                  7.25,6.09,6.80,8.65,8.43,8.29,7.18,7.90,8.45,8.23)
+price <- c(0.97,0.95,0.99,0.91,0.98,0.90,0.89,0.86,0.85,0.82,
+           0.79,0.83,0.81,0.77,0.76,0.80,0.83,0.79,0.76,0.78)
+dtMS <- data.frame(period, marketshare, price)
+dtMS
+```
+
+## Eksplorasi Data
+
+```{r}
+plot(dtMS$price, dtMS$marketshare, pch = 20, col = "blue",
+     main = "Scatter Plot Price vs Market Share",
+     xlab = "Price", ylab = "Market Share")
+cor(dtMS$price, dtMS$marketshare)
+```
+
+Terlihat hubungan negatif antara $Price$ dan $Market\ Share$ — semakin tinggi harga, semakin rendah pangsa pasar.
+
+## Model Regresi Awal
+
+```{r}
+modelMS <- lm(marketshare ~ price, data = dtMS)
+summary(modelMS)
+```
+
+## Diagnostik Sisaan
+
+```{r}
+sisaanMS <- residuals(modelMS)
+fitMS <- predict(modelMS)
+
+par(mfrow = c(2,2))
+qqnorm(sisaanMS)
+qqline(sisaanMS, col = "steelblue", lwd = 2)
+plot(fitMS, sisaanMS, col = "steelblue", pch = 20,
+     xlab = "Fitted Values", ylab = "Sisaan", main = "Sisaan vs Fitted Values")
+abline(a = 0, b = 0, lwd = 2)
+hist(sisaanMS, col = "steelblue")
+plot(period, sisaanMS, col = "steelblue", pch = 20,
+     xlab = "Order", ylab = "Sisaan", main = "Sisaan vs Order")
+lines(period, sisaanMS, col = "red")
+abline(a = 0, b = 0, lwd = 2)
+```
+
+## Identifikasi Autokorelasi
+
+```{r}
+par(mfrow = c(1,2))
+acf(sisaanMS)
+pacf(sisaanMS)
+```
+
+```{r}
+#H0: tidak ada autokorelasi
+#H1: ada autokorelasi
+dwtest(modelMS)
+```
+
+Tolak $\text{H}_0$ karena $\text{p-value < } 0.05$ cukup bukti ada autokorelasi, lanjut ke penanganan.
+
+## Penanganan Autokorelasi
+
+### Metode Cochrane-Orcutt
+
+```{r}
+modelMS.CO <- cochrane.orcutt(modelMS)
+modelMS.CO
+```
+
+```{r}
+rhoMS <- modelMS.CO$rho
+rhoMS
+```
+
+Transformasi manual:
+
+```{r}
+ms.trans <- marketshare[-1] - marketshare[-20]*rhoMS
+price.trans <- price[-1] - price[-20]*rhoMS
+modelMS.COmanual <- lm(ms.trans ~ price.trans)
+summary(modelMS.COmanual)
+```
+
+Kembalikan ke persamaan awal: $\beta_0 = \beta_0^{*}/(1-\hat\rho)$, $\beta_1 = \beta_1^{*}$.
+
+```{r}
+b0MS <- modelMS.COmanual$coefficients[1]/(1-rhoMS)
+b1MS <- modelMS.COmanual$coefficients[2]
+b0MS
+b1MS
+```
+
+```{r}
+dwtest(modelMS.COmanual)
+```
+
+### Metode Hildreth-Lu
+
+```{r}
+hildreth.lu.func <- function(r, model){
+  x <- model.matrix(model)[,-1]
+  y <- model.response(model.frame(model))
+  n <- length(y)
+  t <- 2:n
+  y <- y[t] - r*y[t-1]
+  x <- x[t] - r*x[t-1]
+  return(lm(y ~ x))
+}
+```
+
+Pencarian $\rho$ kasar (step 0.1):
+
+```{r}
+r <- seq(0.1, 0.9, by = 0.1)
+tabMS <- data.frame(rho = r,
+                     SSE = sapply(r, function(i) deviance(hildreth.lu.func(i, modelMS))))
+round(tabMS, 4)
+```
+
+Perhalus di sekitar $\rho$ dengan SSE terkecil (ganti rentang di bawah sesuai hasil tabel kasar):
+
+```{r}
+rOptMS <- seq(0.1, 0.5, by = 0.001)
+tabOptMS <- data.frame(rho = rOptMS,
+                        SSE = sapply(rOptMS, function(i) deviance(hildreth.lu.func(i, modelMS))))
+head(tabOptMS[order(tabOptMS$SSE), ])
+```
+
+```{r}
+rhoOptMS <- tabOptMS$rho[which.min(tabOptMS$SSE)]
+rhoOptMS
+
+plot(tabMS$SSE ~ tabMS$rho, type = "l", xlab = "Rho", ylab = "SSE")
+abline(v = rhoOptMS, lty = 2, col = "red", lwd = 2)
+```
+
+```{r}
+modelMS.HL <- hildreth.lu.func(rhoOptMS, modelMS)
+summary(modelMS.HL)
+
+cat("y = ", coef(modelMS.HL)[1]/(1-rhoOptMS), "+", coef(modelMS.HL)[2], "x", sep = "")
+```
+
+```{r}
+dwtest(modelMS.HL)
+```
+
+## Perbandingan Model
+
+```{r}
+sseMS.awal <- anova(modelMS)$`Sum Sq`[2]
+sseMS.CO <- anova(modelMS.COmanual)$`Sum Sq`[2]
+sseMS.HL <- anova(modelMS.HL)$`Sum Sq`[2]
+
+akurasiMS <- matrix(c(sseMS.awal, sseMS.CO, sseMS.HL,
+                       sseMS.awal/20, sseMS.CO/20, sseMS.HL/20),
+                     nrow = 2, byrow = TRUE)
+colnames(akurasiMS) <- c("Model Awal", "Cochrane-Orcutt", "Hildreth-Lu")
+row.names(akurasiMS) <- c("SSE", "MSE")
+akurasiMS
+```
+
+# Sales and Advertising
+
+## Input Data
+
+```{r}
+tahun <- 1975:2014
+sales <- c(11.7,12.0,12.3,12.8,13.1,13.6,13.9,14.4,14.7,15.3,
+           15.5,15.8,16.1,16.6,16.9,16.7,16.9,17.4,17.6,17.9,
+           18.0,17.9,18.0,18.2,18.2,18.3,18.6,19.2,19.3,19.5,
+           19.2,19.3,19.5,20.0,20.0,19.9,19.8,19.9,20.2,21.0)
+advertising <- c(9.4,9.6,10.0,10.4,10.8,10.9,11.7,12.2,12.5,12.9,
+                  13.0,13.2,13.8,14.2,14.6,14.4,15.0,15.4,15.7,15.9,
+                  15.9,16.0,16.3,16.2,16.8,17.3,17.6,18.1,18.3,18.5,
+                  18.7,18.9,19.2,20.0,20.0,20.3,20.4,21.0,21.5,22.1)
+dtSA <- data.frame(tahun, sales, advertising)
+dtSA
+```
+
+## Eksplorasi Data
+
+```{r}
+plot(dtSA$advertising, dtSA$sales, pch = 20, col = "blue",
+     main = "Scatter Plot Advertising vs Sales",
+     xlab = "Advertising", ylab = "Sales")
+cor(dtSA$advertising, dtSA$sales)
+```
+
+Terlihat hubungan positif yang kuat antara $Advertising$ dan $Sales$.
+
+## Model Regresi Awal
+
+```{r}
+modelSA <- lm(sales ~ advertising, data = dtSA)
+summary(modelSA)
+```
+
+## Diagnostik Sisaan
+
+```{r}
+sisaanSA <- residuals(modelSA)
+fitSA <- predict(modelSA)
+
+par(mfrow = c(2,2))
+qqnorm(sisaanSA)
+qqline(sisaanSA, col = "steelblue", lwd = 2)
+plot(fitSA, sisaanSA, col = "steelblue", pch = 20,
+     xlab = "Fitted Values", ylab = "Sisaan", main = "Sisaan vs Fitted Values")
+abline(a = 0, b = 0, lwd = 2)
+hist(sisaanSA, col = "steelblue")
+plot(1:40, sisaanSA, col = "steelblue", pch = 20,
+     xlab = "Order", ylab = "Sisaan", main = "Sisaan vs Order")
+lines(1:40, sisaanSA, col = "red")
+abline(a = 0, b = 0, lwd = 2)
+```
+
+## Identifikasi Autokorelasi
+
+```{r}
+par(mfrow = c(1,2))
+acf(sisaanSA)
+pacf(sisaanSA)
+```
+
+```{r}
+#H0: tidak ada autokorelasi
+#H1: ada autokorelasi
+dwtest(modelSA)
+```
+
+Tolak $\text{H}_0$ karena $\text{p-value < } 0.05$ cukup bukti ada autokorelasi, lanjut ke penanganan.
+
+## Penanganan Autokorelasi
+
+### Metode Cochrane-Orcutt
+
+```{r}
+modelSA.CO <- cochrane.orcutt(modelSA)
+modelSA.CO
+```
+
+```{r}
+rhoSA <- modelSA.CO$rho
+rhoSA
+```
+
+```{r}
+sales.trans <- sales[-1] - sales[-40]*rhoSA
+adv.trans <- advertising[-1] - advertising[-40]*rhoSA
+modelSA.COmanual <- lm(sales.trans ~ adv.trans)
+summary(modelSA.COmanual)
+```
+
+```{r}
+b0SA <- modelSA.COmanual$coefficients[1]/(1-rhoSA)
+b1SA <- modelSA.COmanual$coefficients[2]
+b0SA
+b1SA
+```
+
+```{r}
+dwtest(modelSA.COmanual)
+```
+
+### Metode Hildreth-Lu
+
+Pencarian $\rho$ kasar (step 0.1):
+
+```{r}
+r <- seq(0.1, 0.9, by = 0.1)
+tabSA <- data.frame(rho = r,
+                     SSE = sapply(r, function(i) deviance(hildreth.lu.func(i, modelSA))))
+round(tabSA, 4)
+```
+
+Perhalus di sekitar $\rho$ dengan SSE terkecil:
+
+```{r}
+rOptSA <- seq(0.1, 0.5, by = 0.001)
+tabOptSA <- data.frame(rho = rOptSA,
+                        SSE = sapply(rOptSA, function(i) deviance(hildreth.lu.func(i, modelSA))))
+head(tabOptSA[order(tabOptSA$SSE), ])
+```
+
+```{r}
+rhoOptSA <- tabOptSA$rho[which.min(tabOptSA$SSE)]
+rhoOptSA
+
+plot(tabSA$SSE ~ tabSA$rho, type = "l", xlab = "Rho", ylab = "SSE")
+abline(v = rhoOptSA, lty = 2, col = "red", lwd = 2)
+```
+
+```{r}
+modelSA.HL <- hildreth.lu.func(rhoOptSA, modelSA)
+summary(modelSA.HL)
+
+cat("y = ", coef(modelSA.HL)[1]/(1-rhoOptSA), "+", coef(modelSA.HL)[2], "x", sep = "")
+```
+
+```{r}
+dwtest(modelSA.HL)
+```
+Dengan demikian, masih terdapat cukup bukti adanya autokorelasi positif pada residual setelah dilakukan penanganan.
+
+## Perbandingan Model
+
+```{r}
+sseSA.awal <- anova(modelSA)$`Sum Sq`[2]
+sseSA.CO <- anova(modelSA.COmanual)$`Sum Sq`[2]
+sseSA.HL <- anova(modelSA.HL)$`Sum Sq`[2]
+
+akurasiSA <- matrix(c(sseSA.awal, sseSA.CO, sseSA.HL,
+                       sseSA.awal/40, sseSA.CO/40, sseSA.HL/40),
+                     nrow = 2, byrow = TRUE)
+colnames(akurasiSA) <- c("Model Awal", "Cochrane-Orcutt", "Hildreth-Lu")
+row.names(akurasiSA) <- c("SSE", "MSE")
+akurasiSA
+```
