@@ -1,0 +1,397 @@
+---
+title: "Tugas MPDW Praktikum"
+author: "Darren Nathanael Heryanto"
+date: "17 September 2026"
+output:
+  rmdformats::readthedown:
+    toc_depth: 2
+    self_contained: true
+    highlight: tango
+  html_document:
+    toc_depth: '2'
+    df_print: paged
+---
+
+# No. 1 - Proses MA(2)
+
+Bangkitkan model MA(2) dengan $\theta_1 = 0.4$ dan $\theta_2 = 0.6$ sebanyak 300 data secara manual dan dengan `arima.sim`.
+
+```{r}
+n <- 300
+theta1 <- 0.4
+theta2 <- 0.6
+
+set.seed(123)
+e_ma <- rnorm(n + 2)
+
+y_ma_manual <- numeric(n)
+for (t in 3:(n + 2)) {
+  y_ma_manual[t - 2] <- e_ma[t] +
+    theta1 * e_ma[t - 1] +
+    theta2 * e_ma[t - 2]
+}
+
+y_ma_manual <- ts(y_ma_manual)
+
+set.seed(123)
+y_ma_arima <- arima.sim(
+  model = list(ma = c(theta1, theta2)),
+  n = n
+)
+
+head(y_ma_manual)
+head(y_ma_arima)
+```
+
+Buat plot time series, plot ACF, plot PACF, dan plot EACF. Identifikasi apakah data tersebut stasioner.
+
+```{r}
+par(mfrow = c(3, 1))
+plot(
+  y_ma_manual,
+  type = "l",
+  main = "Time Series MA(2) - Manual",
+  xlab = "Waktu",
+  ylab = "Yt"
+)
+acf(y_ma_manual, main = "ACF MA(2) - Manual")
+pacf(y_ma_manual, main = "PACF MA(2) - Manual")
+par(mfrow = c(1, 1))
+
+TSA::eacf(y_ma_manual)
+
+par(mfrow = c(3, 1))
+plot(
+  y_ma_arima,
+  type = "l",
+  main = "Time Series MA(2) - arima.sim",
+  xlab = "Waktu",
+  ylab = "Yt"
+)
+acf(y_ma_arima, main = "ACF MA(2) - arima.sim")
+pacf(y_ma_arima, main = "PACF MA(2) - arima.sim")
+par(mfrow = c(1, 1))
+
+TSA::eacf(y_ma_arima)
+```
+
+**Identifikasi stasioner:** Proses MA dengan orde berhingga selalu stasioner secara kovarians. Pada MA(2), ACF secara teoritis akan *cut off* setelah lag 2, sedangkan PACF cenderung menurun secara bertahap (*tail off*).
+
+**Interpretasi plot:** Plot deret waktu berfluktuasi di sekitar rata-rata yang relatif konstan dan tidak menunjukkan tren yang sistematis, sesuai dengan karakteristik proses stasioner. Pada ACF, korelasi yang menonjol terutama terdapat sampai lag 2, kemudian secara teoritis menjadi nol. PACF tidak langsung terputus pada lag tertentu, melainkan cenderung menurun bertahap. Pola EACF juga mendukung struktur MA dengan orde rendah.
+
+Buat scatterplot antara $Y_t$ dengan $Y_{t-1}$, $Y_t$ dengan $Y_{t-2}$, serta $Y_t$ dengan $Y_{t-3}$.
+
+```{r}
+plot_lag_scatter <- function(x, judul) {
+  x <- as.numeric(x)
+  n_x <- length(x)
+
+  par(mfrow = c(1, 3))
+
+  plot(
+    x[1:(n_x - 1)], x[2:n_x],
+    xlab = expression(Y[t-1]),
+    ylab = expression(Y[t]),
+    main = paste(judul, "Lag 1")
+  )
+
+  plot(
+    x[1:(n_x - 2)], x[3:n_x],
+    xlab = expression(Y[t-2]),
+    ylab = expression(Y[t]),
+    main = paste(judul, "Lag 2")
+  )
+
+  plot(
+    x[1:(n_x - 3)], x[4:n_x],
+    xlab = expression(Y[t-3]),
+    ylab = expression(Y[t]),
+    main = paste(judul, "Lag 3")
+  )
+
+  par(mfrow = c(1, 1))
+}
+
+plot_lag_scatter(y_ma_manual, "MA(2) Manual -")
+plot_lag_scatter(y_ma_arima, "MA(2) arima.sim -")
+```
+
+**Interpretasi scatterplot:** Hubungan antara $Y_t$ dan $Y_{t-1}$ serta antara $Y_t$ dan $Y_{t-2}$ terlihat lebih berpola dibandingkan hubungan antara $Y_t$ dan $Y_{t-3}$. Hal ini konsisten dengan sifat MA(2), karena autokorelasi teoritis hanya ada sampai lag 2. Pada lag 3 dan seterusnya, titik-titik seharusnya semakin menyebar tanpa pola linear yang jelas.
+
+Hitung autokorelasi masing-masing, baik dari data bangkitan maupun secara teoritis.
+
+```{r}
+acf_ma_manual <- acf(
+  y_ma_manual,
+  lag.max = 10,
+  plot = FALSE
+)$acf
+
+acf_ma_arima <- acf(
+  y_ma_arima,
+  lag.max = 10,
+  plot = FALSE
+)$acf
+
+acf_ma_teori <- ARMAacf(
+  ma = c(theta1, theta2),
+  lag.max = 10
+)
+
+hasil_acf_ma <- data.frame(
+  Lag = 0:10,
+  Manual = as.numeric(acf_ma_manual),
+  Arima_sim = as.numeric(acf_ma_arima),
+  Teoritis = as.numeric(acf_ma_teori)
+)
+
+round(hasil_acf_ma, 4)
+```
+
+**Interpretasi autokorelasi:** Secara teoritis, untuk MA(2) diperoleh autokorelasi nonnol hanya pada lag 1 dan lag 2, sedangkan untuk lag lebih dari 2 nilainya sama dengan nol. Nilai autokorelasi dari data bangkitan tidak harus sama persis dengan nilai teoritis karena dihitung dari sampel berukuran 300, tetapi polanya seharusnya mendekati pola teoritis tersebut. Perbedaan kecil merupakan variasi akibat simulasi.
+
+
+# No. 2 - Proses AR(2)
+
+Bangkitkan model AR(2) dengan $\phi_1 = 0.5$ dan $\phi_2 = 0.2$ sebanyak 300 data secara manual dan dengan `arima.sim`.
+
+```{r}
+n <- 300
+phi1 <- 0.5
+phi2 <- 0.2
+burn_in <- 200
+
+set.seed(456)
+# AR(2) membutuhkan dua nilai awal. Tambahkan 2 observasi awal,
+# lalu buang 200 observasi burn-in sebelum mengambil 300 data akhir.
+e_ar <- rnorm(n + burn_in + 2)
+y_ar_all <- numeric(n + burn_in + 2)
+
+for (t in 3:(n + burn_in + 2)) {
+  y_ar_all[t] <- phi1 * y_ar_all[t - 1] +
+    phi2 * y_ar_all[t - 2] +
+    e_ar[t]
+}
+
+y_ar_manual <- ts(tail(y_ar_all, n))
+
+set.seed(456)
+y_ar_arima <- arima.sim(
+  model = list(ar = c(phi1, phi2)),
+  n = n
+)
+
+head(y_ar_manual)
+head(y_ar_arima)
+```
+
+Buat plot time series, plot ACF, plot PACF, dan plot EACF. Identifikasi apakah data tersebut stasioner.
+
+```{r}
+par(mfrow = c(3, 1))
+plot(
+  y_ar_manual,
+  type = "l",
+  main = "Time Series AR(2) - Manual",
+  xlab = "Waktu",
+  ylab = "Yt"
+)
+acf(y_ar_manual, main = "ACF AR(2) - Manual")
+pacf(y_ar_manual, main = "PACF AR(2) - Manual")
+par(mfrow = c(1, 1))
+
+TSA::eacf(y_ar_manual)
+
+par(mfrow = c(3, 1))
+plot(
+  y_ar_arima,
+  type = "l",
+  main = "Time Series AR(2) - arima.sim",
+  xlab = "Waktu",
+  ylab = "Yt"
+)
+acf(y_ar_arima, main = "ACF AR(2) - arima.sim")
+pacf(y_ar_arima, main = "PACF AR(2) - arima.sim")
+par(mfrow = c(1, 1))
+
+TSA::eacf(y_ar_arima)
+```
+
+```{r}
+akar_ar2 <- polyroot(c(1, -phi1, -phi2))
+
+akar_ar2
+Mod(akar_ar2)
+```
+
+**Identifikasi stasioner:** Model AR(2) stasioner jika seluruh akar polinomial AR berada di luar lingkaran satuan, yaitu memiliki modulus lebih dari 1. Untuk $\phi_1 = 0.5$ dan $\phi_2 = 0.2$, akar yang diperoleh memiliki modulus lebih dari 1 sehingga syarat stasioneritas terpenuhi. Secara pola, ACF cenderung *tail off*, sedangkan PACF secara teoritis *cut off* setelah lag 2.
+
+**Interpretasi plot:** Plot deret waktu berfluktuasi di sekitar rata-rata yang relatif konstan sehingga tidak menunjukkan pola tren yang persisten. ACF menurun secara bertahap seiring bertambahnya lag, sedangkan PACF menunjukkan pengaruh utama sampai lag 2. Pola ini sesuai dengan karakteristik teoritis proses AR(2). EACF juga dapat digunakan sebagai pendukung dalam mengidentifikasi orde AR dan MA.
+
+Buat scatterplot antara $Y_t$ dengan $Y_{t-1}$, $Y_t$ dengan $Y_{t-2}$, serta $Y_t$ dengan $Y_{t-3}$.
+
+```{r}
+plot_lag_scatter(y_ar_manual, "AR(2) Manual -")
+plot_lag_scatter(y_ar_arima, "AR(2) arima.sim -")
+```
+
+**Interpretasi scatterplot:** Scatterplot menunjukkan hubungan positif yang cukup jelas antara $Y_t$ dan nilai masa lalunya, terutama pada lag 1 dan lag 2. Hubungan pada lag yang lebih jauh masih dapat muncul karena pada proses AR pengaruh masa lalu diteruskan secara rekursif. Oleh karena itu, berbeda dengan MA(2), korelasi pada AR(2) tidak langsung menjadi nol setelah lag 2.
+
+Hitung autokorelasi masing-masing, baik dari data bangkitan maupun secara teoritis.
+
+```{r}
+acf_ar_manual <- acf(
+  y_ar_manual,
+  lag.max = 10,
+  plot = FALSE
+)$acf
+
+acf_ar_arima <- acf(
+  y_ar_arima,
+  lag.max = 10,
+  plot = FALSE
+)$acf
+
+acf_ar_teori <- ARMAacf(
+  ar = c(phi1, phi2),
+  lag.max = 10
+)
+
+hasil_acf_ar <- data.frame(
+  Lag = 0:10,
+  Manual = as.numeric(acf_ar_manual),
+  Arima_sim = as.numeric(acf_ar_arima),
+  Teoritis = as.numeric(acf_ar_teori)
+)
+
+round(hasil_acf_ar, 4)
+```
+
+**Interpretasi autokorelasi:** Nilai autokorelasi teoritis AR(2) tidak terputus setelah lag 2, tetapi menurun secara bertahap menuju nol. Autokorelasi hasil simulasi manual dan `arima.sim` seharusnya mengikuti pola yang sama meskipun nilainya tidak identik dengan teori. Perbedaan tersebut wajar karena autokorelasi sampel dipengaruhi oleh variasi acak dari 300 data yang dibangkitkan.
+
+
+# No. 3 - Proses ARMA(2,2)
+
+Bangkitkan model ARMA(2,2) dengan $\theta_1 = 0.4$, $\theta_2 = 0.6$, $\phi_1 = 0.5$, dan $\phi_2 = 0.2$ sebanyak 300 data secara manual dan dengan `arima.sim`.
+
+```{r}
+n <- 300
+phi1 <- 0.5
+phi2 <- 0.2
+theta1 <- 0.4
+theta2 <- 0.6
+burn_in <- 200
+
+set.seed(789)
+e_arma <- rnorm(n + burn_in + 2)
+y_arma_all <- numeric(n + burn_in + 2)
+
+for (t in 3:(n + burn_in + 2)) {
+  y_arma_all[t] <- phi1 * y_arma_all[t - 1] +
+    phi2 * y_arma_all[t - 2] +
+    e_arma[t] +
+    theta1 * e_arma[t - 1] +
+    theta2 * e_arma[t - 2]
+}
+
+y_arma_manual <- ts(tail(y_arma_all, n))
+
+set.seed(789)
+y_arma_arima <- arima.sim(
+  model = list(
+    ar = c(phi1, phi2),
+    ma = c(theta1, theta2)
+  ),
+  n = n
+)
+
+head(y_arma_manual)
+head(y_arma_arima)
+```
+
+Buat plot time series, plot ACF, plot PACF, dan plot EACF. Identifikasi apakah data tersebut stasioner.
+
+```{r}
+par(mfrow = c(3, 1))
+plot(
+  y_arma_manual,
+  type = "l",
+  main = "Time Series ARMA(2,2) - Manual",
+  xlab = "Waktu",
+  ylab = "Yt"
+)
+acf(y_arma_manual, main = "ACF ARMA(2,2) - Manual")
+pacf(y_arma_manual, main = "PACF ARMA(2,2) - Manual")
+par(mfrow = c(1, 1))
+
+TSA::eacf(y_arma_manual)
+
+par(mfrow = c(3, 1))
+plot(
+  y_arma_arima,
+  type = "l",
+  main = "Time Series ARMA(2,2) - arima.sim",
+  xlab = "Waktu",
+  ylab = "Yt"
+)
+acf(y_arma_arima, main = "ACF ARMA(2,2) - arima.sim")
+pacf(y_arma_arima, main = "PACF ARMA(2,2) - arima.sim")
+par(mfrow = c(1, 1))
+
+TSA::eacf(y_arma_arima)
+```
+
+```{r}
+akar_arma <- polyroot(c(1, -phi1, -phi2))
+
+akar_arma
+Mod(akar_arma)
+```
+
+**Identifikasi stasioner:** Stasioneritas ARMA(2,2) ditentukan oleh bagian AR. Karena akar polinomial AR untuk $\phi_1 = 0.5$ dan $\phi_2 = 0.2$ berada di luar lingkaran satuan, proses ARMA(2,2) ini stasioner. Pada proses ARMA, ACF dan PACF umumnya sama-sama *tail off*.
+
+**Interpretasi plot:** Deret waktu ARMA(2,2) berfluktuasi di sekitar tingkat yang relatif konstan tanpa tren yang sistematis. Karena model mengandung komponen AR dan MA sekaligus, baik ACF maupun PACF umumnya tidak menunjukkan *cut off* yang tegas, tetapi sama-sama berangsur menurun. Pola EACF dapat membantu mengidentifikasi kombinasi orde AR dan MA yang sesuai.
+
+Buat scatterplot antara $Y_t$ dengan $Y_{t-1}$, $Y_t$ dengan $Y_{t-2}$, serta $Y_t$ dengan $Y_{t-3}$.
+
+```{r, fig.width=9, fig.height=7}
+plot_lag_scatter(y_arma_manual, "ARMA(2,2) Manual -")
+plot_lag_scatter(y_arma_arima, "ARMA(2,2) arima.sim -")
+```
+
+**Interpretasi scatterplot:** Scatterplot memperlihatkan adanya hubungan antara $Y_t$ dan beberapa nilai lag-nya. Hubungan pada lag 1 dan lag 2 umumnya lebih kuat, tetapi korelasi masih dapat berlanjut ke lag berikutnya karena keberadaan komponen AR. Hal ini sesuai dengan karakteristik ARMA, yaitu ketergantungan tidak langsung terputus pada suatu lag tertentu.
+
+Hitung autokorelasi masing-masing, baik dari data bangkitan maupun secara teoritis.
+
+```{r}
+acf_arma_manual <- acf(
+  y_arma_manual,
+  lag.max = 10,
+  plot = FALSE
+)$acf
+
+acf_arma_arima <- acf(
+  y_arma_arima,
+  lag.max = 10,
+  plot = FALSE
+)$acf
+
+acf_arma_teori <- ARMAacf(
+  ar = c(phi1, phi2),
+  ma = c(theta1, theta2),
+  lag.max = 10
+)
+
+hasil_acf_arma <- data.frame(
+  Lag = 0:10,
+  Manual = as.numeric(acf_arma_manual),
+  Arima_sim = as.numeric(acf_arma_arima),
+  Teoritis = as.numeric(acf_arma_teori)
+)
+
+round(hasil_acf_arma, 4)
+```
+
+**Interpretasi autokorelasi:** Autokorelasi teoritis ARMA(2,2) menunjukkan pola yang menurun secara bertahap, bukan langsung menjadi nol setelah lag tertentu. Nilai autokorelasi dari data bangkitan manual dan `arima.sim` dapat berbeda dari nilai teoritis serta berbeda satu sama lain karena menggunakan realisasi proses stokastik yang berbeda. Hal yang lebih penting adalah kesamaan pola umum, yaitu autokorelasi cenderung mengecil ketika lag bertambah.
+
+Secara keseluruhan, ketiga hasil simulasi sesuai dengan karakteristik teoritis masing-masing model: MA(2) memiliki ACF yang *cut off* setelah lag 2, AR(2) memiliki PACF yang *cut off* setelah lag 2, sedangkan ARMA(2,2) memiliki ACF dan PACF yang sama-sama cenderung *tail off*. Ketiga proses yang digunakan pada latihan ini memenuhi kondisi stasioneritas.
