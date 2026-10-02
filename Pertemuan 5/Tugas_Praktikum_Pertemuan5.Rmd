@@ -1,0 +1,665 @@
+---
+title: "Tugas MPDW Praktikum"
+author: "Darren Nathanael Heryanto"
+date: "2 Oktober 2026"
+output:
+  rmdformats::readthedown:
+    toc_depth: 2
+    self_contained: true
+    highlight: tango
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+---
+
+# Pemodelan ARIMA Data Sunspot
+
+## Packages
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(tsibble)
+library(tseries)
+library(MASS)
+library(forecast)
+library(TSA)
+library(TTR)
+library(aTSA)
+library(graphics)
+library(lmtest)
+```
+
+## Data Real
+
+```{r}
+data_sunspot <- read_excel(
+  "C:/Users/user/Downloads/data_sunspot_darren.xlsx",
+  sheet = "Lembar1"
+)
+
+data_sunspot$Tanggal <- as.Date(
+  paste(
+    data_sunspot$Year,
+    data_sunspot$Month,
+    data_sunspot$Date,
+    sep = "-"
+  )
+)
+
+str(data_sunspot)
+head(data_sunspot)
+```
+
+Data terdiri atas `r nrow(data_sunspot)` observasi harian dengan periode pengamatan `r format(min(data_sunspot$Tanggal), "%d %B %Y")` sampai `r format(max(data_sunspot$Tanggal), "%d %B %Y")`. Peubah `Sunspot Number` digunakan sebagai deret waktu utama karena merupakan jumlah bintik matahari pada setiap tanggal pengamatan.
+
+### Pemeriksaan Awal Data
+
+```{r}
+na_sunspot <- sum(is.na(data_sunspot$`Sunspot Number`))
+summary_sunspot <- summary(data_sunspot$`Sunspot Number`)
+status_sunspot <- table(data_sunspot$`Status (1 definitive, 0 provisional)`)
+
+na_sunspot
+summary_sunspot
+status_sunspot
+```
+
+### Pembagian Data Train dan Test
+
+```{r}
+sunspot <- data_sunspot$`Sunspot Number`
+sunspot.ts <- ts(sunspot, frequency = 1)
+
+n <- length(sunspot)
+n_train <- floor(0.86 * n)
+
+sunspot_train <- sunspot[1:n_train]
+sunspot_test  <- sunspot[(n_train + 1):n]
+
+train.ts <- ts(sunspot_train, frequency = 1)
+test.ts  <- ts(sunspot_test, frequency = 1)
+
+tanggal_train <- data_sunspot$Tanggal[1:n_train]
+tanggal_test  <- data_sunspot$Tanggal[(n_train + 1):n]
+
+c(
+  Jumlah_Data = n,
+  Data_Train = length(train.ts),
+  Data_Test = length(test.ts)
+)
+```
+
+Data dibagi menjadi data latih sebesar 86% dan data uji sebesar 14%. Dengan `r n` observasi, diperoleh `r length(train.ts)` observasi data latih dan `r length(test.ts)` observasi data uji. Data latih digunakan untuk identifikasi dan pendugaan model, sedangkan data uji disimpan untuk mengevaluasi hasil peramalan secara *out-of-sample*. Periode data latih berakhir pada `r format(max(tanggal_train), "%d %B %Y")`, sedangkan data uji dimulai pada `r format(min(tanggal_test), "%d %B %Y")`.
+
+## Eksplorasi Data
+
+### Plot Data Penuh
+
+```{r}
+plot(
+  data_sunspot$Tanggal,
+  sunspot,
+  type = "o",
+  pch = 16,
+  cex = 0.5,
+  lty = 1,
+  xlab = "Tanggal",
+  ylab = "Sunspot Number",
+  main = "Plot Data Sunspot Harian"
+)
+```
+
+Plot menunjukkan bahwa jumlah *sunspot* mengalami fluktuasi yang cukup besar dari hari ke hari. Terlihat beberapa kelompok periode dengan nilai tinggi dan rendah, tetapi tidak tampak pola tren linear yang konsisten sepanjang seluruh periode. Walaupun demikian, pola visual saja belum cukup untuk menentukan kestasioneran sehingga perlu dikonfirmasi dengan ACF dan uji ADF.
+
+### Plot Data Train dan Test
+
+```{r}
+par(mfrow = c(2, 1))
+
+plot(
+  tanggal_train,
+  train.ts,
+  type = "o",
+  pch = 16,
+  cex = 0.5,
+  lty = 1,
+  xlab = "Tanggal",
+  ylab = "Sunspot Number",
+  main = "Data Train"
+)
+
+plot(
+  tanggal_test,
+  test.ts,
+  type = "o",
+  pch = 16,
+  cex = 0.7,
+  lty = 1,
+  xlab = "Tanggal",
+  ylab = "Sunspot Number",
+  main = "Data Test"
+)
+
+par(mfrow = c(1, 1))
+```
+
+Data train digunakan dalam seluruh proses identifikasi dan estimasi model. Data test tidak digunakan untuk menentukan orde model sehingga tetap dapat digunakan sebagai evaluasi kemampuan peramalan pada data yang belum dilihat model.
+
+## Uji Stasioneritas dan Transformasi
+
+### ACF Data Train
+
+```{r}
+acf(
+  train.ts,
+  main = "ACF Data Sunspot Train",
+  lag.max = 20
+)
+```
+
+ACF digunakan untuk melihat ketergantungan antarobservasi. Autokorelasi yang masih cukup kuat pada beberapa lag awal menjadi indikasi bahwa nilai *sunspot* pada suatu hari masih berkaitan dengan nilai pada hari-hari sebelumnya. Kestasioneran kemudian diperiksa secara formal menggunakan uji ADF.
+
+### Uji ADF Data Train
+
+```{r}
+adf_awal <- tseries::adf.test(train.ts)
+adf_awal
+```
+
+Hipotesis uji ADF adalah:
+
+$H_0$: data memiliki *unit root* atau belum stasioner.
+
+$H_1$: data stasioner.
+
+Hasil uji ADF memberikan nilai statistik Dickey-Fuller sebesar `r round(as.numeric(adf_awal$statistic), 4)` dengan *p-value* sebesar `r format.pval(adf_awal$p.value, digits = 4)`. Karena *p-value* lebih besar dari taraf nyata 5%, maka $H_0$ tidak ditolak. Dengan demikian, data train **belum dapat dinyatakan stasioner** dan perlu dilakukan penanganan lebih lanjut sebelum pemodelan ARIMA.
+
+### Transformasi Box-Cox
+
+```{r}
+index <- seq_along(train.ts)
+
+bc <- MASS::boxcox(
+  as.numeric(train.ts) ~ index,
+  lambda = seq(-1, 2, by = 0.05),
+  plotit = TRUE,
+  interp = TRUE
+)
+
+lambda_opt <- bc$x[which.max(bc$y)]
+
+ci_lambda <- bc$x[
+  bc$y > max(bc$y) - 0.5 * qchisq(0.95, df = 1)
+]
+
+ci_lower <- min(ci_lambda)
+ci_upper <- max(ci_lambda)
+
+c(
+  Lambda_Optimum = lambda_opt,
+  Batas_Bawah = ci_lower,
+  Batas_Atas = ci_upper
+)
+```
+
+Transformasi Box-Cox digunakan untuk membantu menstabilkan ragam sebelum pemodelan. Nilai lambda optimum yang diperoleh adalah sekitar `r round(lambda_opt, 3)` dengan selang kepercayaan 95% sekitar [`r round(ci_lower, 3)`, `r round(ci_upper, 3)`]. Karena nilai 1 `r ifelse(ci_lower <= 1 & ci_upper >= 1, "masih berada", "tidak berada")` dalam selang tersebut, transformasi Box-Cox secara statistik `r ifelse(ci_lower <= 1 & ci_upper >= 1, "tidak wajib, tetapi tetap digunakan sebagai bagian dari alur analisis untuk membantu menstabilkan ragam", "digunakan untuk membantu menstabilkan ragam")`.
+
+### Data Setelah Box-Cox
+
+```{r}
+train.bc <- forecast::BoxCox(
+  train.ts,
+  lambda = lambda_opt
+)
+
+plot(
+  train.bc,
+  type = "o",
+  pch = 16,
+  cex = 0.5,
+  lty = 1,
+  xlab = "Waktu",
+  ylab = "Box-Cox Sunspot Number",
+  main = "Data Train Setelah Transformasi Box-Cox"
+)
+```
+
+Transformasi Box-Cox diterapkan pada data train menggunakan lambda optimum. Transformasi ini ditujukan terutama untuk kestabilan ragam, bukan untuk menjamin kestasioneran dalam rataan.
+
+### Uji ADF Setelah Box-Cox
+
+```{r}
+adf_bc <- tseries::adf.test(train.bc)
+adf_bc
+```
+
+Setelah transformasi Box-Cox, nilai statistik Dickey-Fuller sebesar `r round(as.numeric(adf_bc$statistic), 4)` dengan *p-value* sebesar `r format.pval(adf_bc$p.value, digits = 4)`. Karena *p-value* masih lebih besar dari 0,05, $H_0$ tidak ditolak. Artinya, transformasi Box-Cox belum membuat data stasioner dalam rataan. Oleh karena itu, proses berikutnya adalah **first differencing**.
+
+## First Differencing
+
+### Differencing Orde 1
+
+```{r}
+train.diff <- diff(train.bc, differences = 1)
+
+plot(
+  train.diff,
+  type = "o",
+  pch = 16,
+  cex = 0.5,
+  lty = 1,
+  xlab = "Waktu",
+  ylab = "First Difference",
+  main = "Data Setelah First Differencing"
+)
+```
+
+First differencing dilakukan untuk menghilangkan komponen nonstasioner dalam rataan. Karena uji ADF pada data awal dan setelah Box-Cox belum menolak $H_0$, orde differencing dicoba sebesar $d=1$.
+
+### Uji ADF Setelah First Differencing
+
+```{r}
+adf_diff <- tseries::adf.test(train.diff)
+adf_diff
+```
+
+Setelah first differencing, diperoleh statistik Dickey-Fuller sebesar `r round(as.numeric(adf_diff$statistic), 4)` dengan *p-value* sebesar `r format.pval(adf_diff$p.value, digits = 4)`. Karena *p-value* lebih kecil dari 0,05, maka $H_0$ ditolak. Dengan demikian, data hasil first differencing **sudah stasioner**. Oleh karena itu, orde differencing yang digunakan dalam model ARIMA ditetapkan sebesar $d=1$.
+
+Dengan demikian, alur kestasioneran data adalah: data awal belum stasioner, transformasi Box-Cox belum menghasilkan stasioneritas, kemudian first differencing berhasil menghasilkan data stasioner. Karena differencing pertama sudah cukup, tidak dilakukan differencing orde kedua.
+
+## Identifikasi Model ARIMA
+
+### ACF dan PACF Setelah Differencing
+
+```{r}
+par(mfrow = c(1, 2))
+
+acf(
+  train.diff,
+  main = "ACF Setelah First Differencing",
+  lag.max = 20
+)
+
+pacf(
+  train.diff,
+  main = "PACF Setelah First Differencing",
+  lag.max = 20
+)
+
+par(mfrow = c(1, 1))
+```
+
+ACF dan PACF setelah differencing digunakan untuk mengidentifikasi orde $p$ dan $q$. Pada data hasil differencing tidak terlihat pola dominan yang sangat panjang sehingga kandidat model dipertahankan pada orde rendah. Beberapa kombinasi AR dan MA diuji agar pemilihan model tidak hanya bergantung pada satu plot.
+
+### EACF
+
+```{r}
+TSA::eacf(train.diff)
+```
+
+EACF digunakan sebagai alat bantu tambahan untuk menentukan kombinasi orde AR dan MA. Hasil EACF tidak digunakan secara tunggal, tetapi dikombinasikan dengan ACF, PACF, AIC, BIC, signifikansi parameter, dan diagnostik sisaan.
+
+## Pendugaan Model Tentatif
+
+Karena data hasil first differencing sudah stasioner, model yang digunakan pada skala Box-Cox adalah ARIMA dengan $d=1$. Kandidat utama yang diuji adalah model berorde rendah sebagai berikut:
+
+- ARIMA(0,1,0)
+- ARIMA(1,1,0)
+- ARIMA(0,1,1)
+- ARIMA(2,1,0)
+- ARIMA(0,1,2)
+- ARIMA(1,1,1)
+- ARIMA(1,1,2)
+- ARIMA(2,1,1)
+
+```{r}
+model_list <- list(
+  "ARIMA(0,1,0)" = forecast::Arima(train.bc, order = c(0, 1, 0), method = "ML"),
+  "ARIMA(1,1,0)" = forecast::Arima(train.bc, order = c(1, 1, 0), method = "ML"),
+  "ARIMA(0,1,1)" = forecast::Arima(train.bc, order = c(0, 1, 1), method = "ML"),
+  "ARIMA(2,1,0)" = forecast::Arima(train.bc, order = c(2, 1, 0), method = "ML"),
+  "ARIMA(0,1,2)" = forecast::Arima(train.bc, order = c(0, 1, 2), method = "ML"),
+  "ARIMA(1,1,1)" = forecast::Arima(train.bc, order = c(1, 1, 1), method = "ML"),
+  "ARIMA(1,1,2)" = forecast::Arima(train.bc, order = c(1, 1, 2), method = "ML"),
+  "ARIMA(2,1,1)" = forecast::Arima(train.bc, order = c(2, 1, 1), method = "ML")
+)
+
+model_tentatif <- data.frame(
+  Model = names(model_list),
+  AIC = sapply(model_list, AIC),
+  BIC = sapply(model_list, BIC)
+)
+
+model_tentatif <- model_tentatif[order(model_tentatif$AIC), ]
+row.names(model_tentatif) <- NULL
+model_tentatif
+```
+
+Berdasarkan hasil perhitungan pada data ini, model dengan AIC terkecil di antara kandidat berorde rendah adalah `r model_tentatif$Model[1]`. Nilai AIC digunakan sebagai salah satu ukuran utama kecocokan model, sedangkan BIC digunakan sebagai pembanding yang memberikan penalti lebih besar terhadap kompleksitas model.
+
+```{r}
+for (nm in names(model_list)) {
+  cat("\n==============================\n")
+  cat(nm, "\n")
+  print(summary(model_list[[nm]]))
+  cat("\nUji signifikansi koefisien:\n")
+  if (length(coef(model_list[[nm]])) > 0) {
+    print(lmtest::coeftest(model_list[[nm]]))
+  } else {
+    cat("Tidak terdapat koefisien AR/MA yang perlu diuji.\n")
+  }
+}
+```
+
+Hasil pendugaan parameter digunakan untuk memastikan bahwa model dengan AIC rendah tidak hanya memperoleh kecocokan melalui penambahan parameter yang tidak informatif. Pada data ini, ARIMA(0,1,2) memberikan AIC yang sedikit lebih rendah daripada ARIMA(0,1,0), sedangkan ARIMA(0,1,0) memiliki BIC paling rendah di antara kandidat sederhana. ARIMA(0,1,2) tetap dipertimbangkan sebagai model utama karena memberikan AIC terendah dan seluruh proses selanjutnya menunjukkan bahwa sisaan model tidak mengandung autokorelasi yang berarti. Salah satu koefisien MA pada model tersebut perlu diperhatikan karena signifikansinya lebih lemah dibandingkan koefisien lainnya.
+
+## Model Utama dan Diagnostik Sisaan
+
+Untuk melanjutkan alur analisis, model dengan AIC terkecil dari kandidat berorde rendah digunakan sebagai model utama.
+
+```{r}
+model_best_name <- model_tentatif$Model[1]
+model_best <- model_list[[model_best_name]]
+
+model_best_name
+summary(model_best)
+```
+
+Model utama yang digunakan adalah `r model_best_name`. Pemilihan dilakukan setelah mempertimbangkan nilai AIC, BIC, signifikansi parameter, serta hasil diagnostik sisaan. Model ini selanjutnya diperiksa apakah sudah menghasilkan sisaan yang menyerupai *white noise*.
+
+### Q-Q Plot, Plot Sisaan, ACF, dan PACF Sisaan
+
+```{r}
+sisaan <- residuals(model_best)
+
+par(
+  mfrow = c(2, 2),
+  mar = c(4, 4, 2, 1),
+  oma = c(0, 0, 2, 0)
+)
+
+qqnorm(sisaan, main = "Normal Q-Q Plot Sisaan")
+qqline(sisaan, lwd = 2)
+
+plot(
+  sisaan,
+  type = "p",
+  main = "Plot Sisaan terhadap Waktu",
+  xlab = "Waktu",
+  ylab = "Sisaan"
+)
+
+acf(
+  sisaan,
+  main = "ACF Sisaan",
+  lag.max = 20
+)
+
+pacf(
+  sisaan,
+  main = "PACF Sisaan",
+  lag.max = 20
+)
+
+par(mfrow = c(1, 1))
+```
+
+Q-Q plot digunakan untuk mengevaluasi kedekatan distribusi sisaan dengan distribusi normal. Plot sisaan terhadap waktu digunakan untuk melihat adanya pola sistematis atau perubahan ragam. ACF dan PACF sisaan digunakan untuk memastikan tidak terdapat autokorelasi yang tersisa setelah model diterapkan.
+
+### Uji Kolmogorov-Smirnov
+
+```{r}
+sisaan_std <- (
+  sisaan - mean(sisaan, na.rm = TRUE)
+) / sd(sisaan, na.rm = TRUE)
+
+uji_ks <- ks.test(sisaan_std, "pnorm")
+uji_ks
+```
+
+Hipotesis uji Kolmogorov-Smirnov adalah:
+
+$H_0$: sisaan mengikuti distribusi normal.
+
+$H_1$: sisaan tidak mengikuti distribusi normal.
+
+Nilai *p-value* uji Kolmogorov-Smirnov adalah `r format.pval(uji_ks$p.value, digits = 4)`. Hasil ini digunakan sebagai informasi tambahan mengenai bentuk distribusi sisaan. Apabila *p-value* kurang dari 0,05, normalitas sisaan tidak terpenuhi pada taraf 5%. Kondisi tersebut tidak secara otomatis membuat model ARIMA tidak dapat digunakan untuk peramalan, tetapi perlu dilaporkan sebagai keterbatasan diagnostik.
+
+### Uji Ljung-Box Sisaan
+
+```{r}
+p_best <- arimaorder(model_best)[1]
+q_best <- arimaorder(model_best)[3]
+fitdf_best <- p_best + q_best
+
+uji_ljung <- Box.test(
+  sisaan,
+  lag = 10,
+  type = "Ljung-Box",
+  fitdf = fitdf_best
+)
+
+uji_ljung
+```
+
+Hipotesis uji Ljung-Box adalah:
+
+$H_0$: sisaan tidak memiliki autokorelasi hingga lag yang diuji.
+
+$H_1$: sisaan memiliki autokorelasi.
+
+Uji Ljung-Box menghasilkan *p-value* sebesar `r format.pval(uji_ljung$p.value, digits = 4)`. Karena nilai tersebut `r ifelse(uji_ljung$p.value > 0.05, "lebih besar", "lebih kecil")` dari 0,05, maka $H_0$ `r ifelse(uji_ljung$p.value > 0.05, "tidak ditolak", "ditolak")`. Dengan demikian, sisaan `r ifelse(uji_ljung$p.value > 0.05, "tidak menunjukkan autokorelasi yang signifikan", "masih menunjukkan autokorelasi yang signifikan")`.
+
+### Uji Ljung-Box Sisaan Kuadrat
+
+```{r}
+uji_ljung_sq <- Box.test(
+  sisaan^2,
+  lag = 10,
+  type = "Ljung-Box"
+)
+
+uji_ljung_sq
+```
+
+Uji Ljung-Box pada sisaan kuadrat digunakan untuk memeriksa apakah terdapat pola ketergantungan pada ragam sisaan. Diperoleh *p-value* sebesar `r format.pval(uji_ljung_sq$p.value, digits = 4)`. Karena nilai tersebut `r ifelse(uji_ljung_sq$p.value > 0.05, "lebih besar", "lebih kecil")` dari 0,05, maka tidak terdapat bukti yang cukup untuk menyatakan adanya autokorelasi pada sisaan kuadrat.
+
+### Uji Rataan Sisaan
+
+```{r}
+uji_mean <- t.test(
+  sisaan,
+  mu = 0,
+  conf.level = 0.95
+)
+
+uji_mean
+```
+
+Uji-t dilakukan untuk memeriksa apakah rataan sisaan berbeda secara signifikan dari nol. Diperoleh *p-value* sebesar `r format.pval(uji_mean$p.value, digits = 4)`. Karena nilai tersebut `r ifelse(uji_mean$p.value > 0.05, "lebih besar", "lebih kecil")` dari 0,05, maka rataan sisaan `r ifelse(uji_mean$p.value > 0.05, "tidak berbeda signifikan dari nol", "berbeda signifikan dari nol")`.
+
+### Ringkasan Diagnostik
+
+```{r}
+diagnostik <- data.frame(
+  Uji = c(
+    "Kolmogorov-Smirnov",
+    "Ljung-Box Sisaan",
+    "Ljung-Box Sisaan Kuadrat",
+    "Uji-t Rataan Sisaan"
+  ),
+  P_Value = c(
+    uji_ks$p.value,
+    uji_ljung$p.value,
+    uji_ljung_sq$p.value,
+    uji_mean$p.value
+  )
+)
+
+diagnostik$Keputusan_5pct <- ifelse(
+  diagnostik$P_Value > 0.05,
+  "Gagal tolak H0",
+  "Tolak H0"
+)
+
+diagnostik
+```
+
+Secara keseluruhan, model dianggap memadai apabila sisaan tidak menunjukkan autokorelasi, tidak menunjukkan pola ketergantungan pada ragam, dan memiliki rataan yang tidak berbeda signifikan dari nol. Normalitas sisaan dievaluasi secara terpisah dan dilaporkan apa adanya berdasarkan hasil uji serta Q-Q plot.
+
+## Overfitting
+
+Overfitting dilakukan dengan menambahkan orde AR atau MA dari model utama. Karena model utama pada data ini adalah ARIMA(0,1,2), model yang lebih kompleks dibandingkan model utama yang diperiksa adalah ARIMA(1,1,2), ARIMA(0,1,3), dan ARIMA(1,1,3).
+
+```{r}
+model_over1 <- forecast::Arima(
+  train.bc,
+  order = c(1, 1, 2),
+  method = "ML"
+)
+
+model_over2 <- forecast::Arima(
+  train.bc,
+  order = c(0, 1, 3),
+  method = "ML"
+)
+
+model_over3 <- forecast::Arima(
+  train.bc,
+  order = c(1, 1, 3),
+  method = "ML"
+)
+
+overfitting <- data.frame(
+  Model = c(
+    "ARIMA(0,1,2)",
+    "ARIMA(1,1,2)",
+    "ARIMA(0,1,3)",
+    "ARIMA(1,1,3)"
+  ),
+  AIC = c(
+    AIC(model_best),
+    AIC(model_over1),
+    AIC(model_over2),
+    AIC(model_over3)
+  ),
+  BIC = c(
+    BIC(model_best),
+    BIC(model_over1),
+    BIC(model_over2),
+    BIC(model_over3)
+  )
+)
+
+overfitting
+```
+
+Penambahan parameter tidak langsung dianggap lebih baik hanya karena AIC dapat turun. Model yang lebih kompleks juga harus mempertahankan parameter yang informatif dan memberikan perbaikan yang konsisten pada kriteria model. Pada hasil data ini, ARIMA(1,1,3) dapat menghasilkan AIC yang lebih rendah, tetapi model tersebut lebih kompleks dan memiliki parameter yang tidak seluruhnya signifikan. BIC memberikan penalti lebih besar terhadap kompleksitas. Karena itu, model ARIMA(0,1,2) dipertahankan sebagai model utama yang lebih parsimonious untuk tahap peramalan.
+
+## Peramalan
+
+### Forecast pada Data Uji
+
+```{r}
+ramalan_bc <- forecast::forecast(
+  model_best,
+  h = length(test.ts)
+)
+
+ramalan_bc
+```
+
+Peramalan dilakukan sebanyak `r length(test.ts)` periode, sesuai jumlah observasi pada data uji. Model dibentuk pada skala Box-Cox sehingga hasil ramalan kemudian dikembalikan ke skala asli `Sunspot Number` menggunakan transformasi invers Box-Cox.
+
+```{r}
+hasil_forecast <- forecast::InvBoxCox(
+  ramalan_bc$mean,
+  lambda = lambda_opt
+)
+
+hasil_lower <- forecast::InvBoxCox(
+  ramalan_bc$lower,
+  lambda = lambda_opt
+)
+
+hasil_upper <- forecast::InvBoxCox(
+  ramalan_bc$upper,
+  lambda = lambda_opt
+)
+
+perbandingan.sunspot <- data.frame(
+  Tanggal = tanggal_test,
+  Aktual = as.numeric(test.ts),
+  Forecast = as.numeric(hasil_forecast)
+)
+
+perbandingan.sunspot
+```
+
+Tabel tersebut memperlihatkan nilai aktual dan hasil peramalan pada periode data uji. Perbandingan ini digunakan untuk mengevaluasi seberapa dekat hasil ramalan model dengan observasi aktual yang tidak digunakan selama proses estimasi.
+
+### Ukuran Akurasi Forecast
+
+```{r}
+error_forecast <- as.numeric(test.ts) - as.numeric(hasil_forecast)
+
+akurasi_test <- data.frame(
+  RMSE = sqrt(mean(error_forecast^2)),
+  MAE = mean(abs(error_forecast)),
+  MAPE = mean(abs(error_forecast / as.numeric(test.ts))) * 100
+)
+
+akurasi_test
+```
+
+Berdasarkan hasil evaluasi data uji, nilai RMSE sebesar `r round(akurasi_test$RMSE, 3)`, MAE sebesar `r round(akurasi_test$MAE, 3)`, dan MAPE sebesar `r round(akurasi_test$MAPE, 3)`%. Ukuran tersebut menggambarkan besar kesalahan peramalan model terhadap observasi aktual pada periode yang tidak digunakan dalam pendugaan parameter.
+
+### Plot Aktual dan Forecast
+
+```{r}
+plot(
+  data_sunspot$Tanggal,
+  sunspot,
+  type = "l",
+  lty = 1,
+  xlab = "Tanggal",
+  ylab = "Sunspot Number",
+  main = "Data Aktual dan Forecast Sunspot"
+)
+
+abline(
+  v = tanggal_test[1],
+  lty = 3
+)
+
+lines(
+  tanggal_test,
+  hasil_forecast,
+  lty = 2,
+  lwd = 2
+)
+
+legend(
+  "topleft",
+  legend = c(
+    "Data Aktual",
+    "Forecast",
+    "Awal Data Test"
+  ),
+  lty = c(1, 2, 3),
+  lwd = c(1, 2, 1),
+  bty = "n"
+)
+```
+
+Plot akhir memperlihatkan kemampuan model dalam mengikuti pola data pada periode pengujian. Garis vertikal menandai awal data test, sedangkan garis putus-putus menunjukkan hasil forecast pada skala asli `Sunspot Number`.
+
+## Kesimpulan
+
+Berdasarkan seluruh tahapan analisis, data `Sunspot Number` pada periode penelitian belum stasioner pada level. Transformasi Box-Cox dilakukan untuk membantu kestabilan ragam, tetapi hasil uji ADF setelah transformasi masih menunjukkan bahwa data belum stasioner dalam rataan. First differencing kemudian dilakukan dan menghasilkan data yang sudah stasioner, sehingga orde differencing yang digunakan adalah $d=1$.
+
+Identifikasi model dilakukan menggunakan ACF, PACF, EACF, AIC, BIC, dan signifikansi parameter. Berdasarkan kandidat berorde rendah, model utama yang digunakan adalah `r model_best_name`. Diagnostik sisaan menunjukkan bahwa model perlu dinilai terutama dari tidak adanya autokorelasi sisaan dan kestabilan ragam. Hasil uji normalitas sisaan dilaporkan sebagai informasi tambahan dan tidak dijadikan satu-satunya dasar untuk menolak model.
+
+Selanjutnya, model digunakan untuk meramalkan `r length(test.ts)` periode data uji. Evaluasi dilakukan menggunakan RMSE, MAE, dan MAPE dengan membandingkan hasil forecast pada skala asli dengan observasi aktual.
